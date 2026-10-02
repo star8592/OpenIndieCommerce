@@ -493,6 +493,25 @@
           }
         }
       }
+    },
+    "/v1/admin/providers": {
+      "get": {
+        "summary": "List configured payment provider rails",
+        "description": "Admin-only status endpoint. Returns provider name, whether required runtime configuration is present, and non-secret mode information such as Dodo test/live. Never returns provider credentials.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Provider configuration status"
+          },
+          "401": {
+            "description": "Invalid admin token"
+          }
+        }
+      }
     }
   },
   "components": {

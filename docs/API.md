@@ -176,3 +176,9 @@ Replay one delivery: `POST /v1/admin/webhook-deliveries/{id}/redeliver`. Redeliv
 ## Rate limiting
 
 The single-node v0.1 server applies an in-process fixed-window limit by trusted reverse-proxy client IP to checkout creation (60/min), license claim (30/min) and license activation (30/min). Production deployment keeps the service on localhost behind Caddy, which supplies the client forwarding headers. Provider webhooks use provider signature verification and are not subject to this public-client limiter.
+
+## Provider readiness
+
+`GET /v1/admin/providers` is an admin-only, non-secret readiness endpoint. It reports whether Paddle, Dodo and ZPAY have the runtime configuration required to operate. Dodo additionally reports `mode: test|live`. Provider API keys and webhook secrets are never returned.
+
+Use `scripts/provider_acceptance.py --provider dodo --dry-run` to validate service reachability, admin authentication and Dodo configuration without creating checkout objects. Once a Dodo test product exists, set `OIC_DODO_PRODUCT_ID` and run the harness without `--dry-run` to create a disposable OIC Product/Price/Checkout Session and obtain a real Dodo test checkout URL. The harness refuses `mode=live` unless `--allow-live` is explicitly passed.
