@@ -65,7 +65,9 @@ Add only the payment rails you need. The optional license/entitlement module doe
 
 See `docs/API.md` for Product, Price, Checkout Session and merchant webhook examples.
 
-For payment-rail onboarding, `scripts/provider_acceptance.py` provides a fail-closed provider acceptance harness. Start with `--provider dodo --dry-run`; after Dodo test credentials and a test product exist, run without `--dry-run` to obtain a real test checkout URL. Live Dodo runs require explicit `--allow-live`.
+For payment-rail onboarding, `scripts/provider_acceptance.py` provides a fail-closed provider acceptance harness. Use `--provider all --dry-run` for a single readiness report covering Paddle, Dodo and ZPAY. For a specific configured rail, use `--provider paddle|dodo|zpay --dry-run`; running without `--dry-run` creates a disposable OpenIndieCommerce Product/Price/Checkout Session and returns the next browser/provider checkout URL. Dodo live acceptance still requires explicit `--allow-live`.
+
+See `docs/PROVIDER_ONBOARDING.md` for account onboarding, sandbox/test setup, live cutover and payout/settlement gates.
 ## Security model
 
 - Payment-provider API/webhook secrets stay server-side.
