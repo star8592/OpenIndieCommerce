@@ -1,0 +1,3 @@
+[workspace]
+members = ["services/commerce-server"]
+resolver = "3"

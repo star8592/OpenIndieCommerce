@@ -1,0 +1,14 @@
+[Unit]
+Description=Back up OpenIndieCommerce commerce state
+After=openindiecommerce.service
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/openindiecommerce/openindiecommerce.env
+ExecStart=/opt/openindiecommerce/deploy/backup_state.py --output-dir /var/backups/openindiecommerce
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/etc/openindiecommerce/secrets
+ReadWritePaths=/var/backups/openindiecommerce
