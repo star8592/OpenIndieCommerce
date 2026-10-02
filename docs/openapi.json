@@ -440,6 +440,59 @@
           }
         }
       }
+    },
+    "/v1/webhooks/dodo": {
+      "post": {
+        "summary": "Receive Dodo Payments Standard Webhooks",
+        "description": "Verifies webhook-id, webhook-timestamp, webhook-signature against the raw body. Maps payment.succeeded, full refund.succeeded, and dispute.lost into canonical order events.",
+        "parameters": [
+          {
+            "name": "webhook-id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "webhook-timestamp",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "webhook-signature",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Webhook accepted or ignored"
+          },
+          "401": {
+            "description": "Invalid signature"
+          },
+          "422": {
+            "description": "Verified event failed commerce validation"
+          }
+        }
+      }
     }
   },
   "components": {

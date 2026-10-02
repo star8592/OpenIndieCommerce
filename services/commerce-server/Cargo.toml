@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 anyhow = "1"
+base64 = "0.22"
 axum = "0.8"
 hex = "0.4"
 hmac = "0.12"

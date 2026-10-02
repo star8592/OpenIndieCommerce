@@ -1,4 +1,5 @@
 pub mod commerce;
+pub mod dodo;
 pub mod paddle;
 pub mod webhook;
 pub mod zpay;
