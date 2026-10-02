@@ -25,6 +25,7 @@ jobs:
         with:
           node-version: 22
       - run: node --check examples/web-store/server.mjs
-      - run: python3 -m py_compile deploy/scripts/*.py
+      - run: python3 -m py_compile deploy/scripts/*.py scripts/*.py scripts/tests/*.py
+      - run: python3 -m unittest discover -s scripts/tests -v
       - run: bash -n deploy/scripts/preflight.sh
       - run: git diff --check
