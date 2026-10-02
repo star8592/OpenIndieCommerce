@@ -152,3 +152,12 @@ Enable or disable an endpoint: `PATCH /v1/admin/webhooks/{id}` with `{ "active":
 Inspect recent deliveries: `GET /v1/admin/webhook-deliveries?limit=100`.
 
 Replay one delivery: `POST /v1/admin/webhook-deliveries/{id}/redeliver`. Redelivery resets the existing delivery to `pending`; it does not create a duplicate commerce event.
+
+
+## OpenAPI
+
+`GET /openapi.json` returns the embedded OpenAPI 3.1 contract for the public/admin v1 surface. See `API_VERSIONING.md` for compatibility rules.
+
+## Rate limiting
+
+The single-node v0.1 server applies an in-process fixed-window limit by trusted reverse-proxy client IP to checkout creation (60/min), license claim (30/min) and license activation (30/min). Production deployment keeps the service on localhost behind Caddy, which supplies the client forwarding headers. Provider webhooks use provider signature verification and are not subject to this public-client limiter.

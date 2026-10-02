@@ -21,8 +21,8 @@
 - [x] webhook endpoint management/list/disable API
 - [x] event replay / manual redelivery endpoint
 - [x] checkout-session expiry
-- [ ] rate limiting / abuse protection
-- [ ] API versioning policy and OpenAPI specification
+- [x] rate limiting / abuse protection
+- [x] API versioning policy and OpenAPI specification
 
 ## Later
 - Dodo Payments and Creem adapters

@@ -1,4 +1,10 @@
-use std::{collections::BTreeMap, env, fs, net::SocketAddr, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    env, fs,
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use axum::{
     Json, Router,
@@ -33,6 +39,74 @@ struct AppState {
     zpay_key: Option<Arc<String>>,
     zpay_submit_url: Arc<String>,
     zpay_public_base_url: Option<Arc<String>>,
+    public_rate_limiter: RateLimiter,
+}
+
+#[derive(Clone, Default)]
+struct RateLimiter {
+    windows: Arc<Mutex<HashMap<String, (u64, u32)>>>,
+}
+
+impl RateLimiter {
+    fn allow_at(&self, key: &str, limit: u32, window_seconds: u64, now: u64) -> bool {
+        let bucket = now / window_seconds.max(1);
+        let mut windows = self.windows.lock().unwrap();
+        if windows.len() > 10_000 {
+            windows.retain(|_, (seen_bucket, _)| *seen_bucket >= bucket.saturating_sub(1));
+        }
+        let entry = windows.entry(key.to_string()).or_insert((bucket, 0));
+        if entry.0 != bucket {
+            *entry = (bucket, 0);
+        }
+        if entry.1 >= limit {
+            return false;
+        }
+        entry.1 += 1;
+        true
+    }
+
+    fn allow(&self, key: &str, limit: u32, window_seconds: u64) -> bool {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.allow_at(key, limit, window_seconds, now)
+    }
+}
+
+fn client_identity(headers: &HeaderMap) -> String {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+                .map(str::trim)
+        })
+        .filter(|v| !v.is_empty())
+        .unwrap_or("direct")
+        .to_string()
+}
+
+fn enforce_public_rate_limit(
+    state: &AppState,
+    headers: &HeaderMap,
+    scope: &str,
+    limit: u32,
+) -> Result<(), (StatusCode, Json<ApiError>)> {
+    let key = format!("{scope}:{}", client_identity(headers));
+    if state.public_rate_limiter.allow(&key, limit, 60) {
+        Ok(())
+    } else {
+        Err(api_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate limit exceeded; try again shortly",
+        ))
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -326,6 +400,13 @@ async fn zpay_webhook(
         .map_err(|error|(StatusCode::BAD_REQUEST,error.to_string()))
 }
 
+async fn openapi_spec() -> Json<serde_json::Value> {
+    Json(
+        serde_json::from_str(include_str!("../../../docs/openapi.json"))
+            .expect("valid embedded OpenAPI document"),
+    )
+}
+
 async fn health(
     State(state): State<AppState>,
 ) -> Result<Json<Health>, (StatusCode, Json<ApiError>)> {
@@ -495,8 +576,10 @@ async fn create_price(
 
 async fn create_checkout_session(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<CreateCheckoutSessionRequest>,
 ) -> ApiResult<CheckoutSessionResponse> {
+    enforce_public_rate_limit(&state, &headers, "checkout", 60)?;
     let session = state
         .commerce
         .create_checkout_session_with_ttl(
@@ -782,8 +865,10 @@ async fn revoke(
 
 async fn claim_license(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<ClaimRequest>,
 ) -> ApiResult<openindiecommerce_server::IssuedLicense> {
+    enforce_public_rate_limit(&state, &headers, "license-claim", 30)?;
     state
         .store
         .claim_paid_order(
@@ -876,8 +961,10 @@ async fn paddle_webhook(
 
 async fn activate(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<ActivateRequest>,
 ) -> ApiResult<openindiecommerce_server::ActivationResponse> {
+    enforce_public_rate_limit(&state, &headers, "license-activate", 30)?;
     state
         .store
         .activate(&request)
@@ -956,6 +1043,7 @@ async fn main() -> anyhow::Result<()> {
         zpay_key,
         zpay_submit_url,
         zpay_public_base_url,
+        public_rate_limiter: RateLimiter::default(),
     };
     tokio::spawn(webhook_dispatch_loop(state.commerce.clone()));
     let app = Router::new()
@@ -964,6 +1052,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/privacy", get(privacy))
         .route("/refund", get(refund))
         .route("/health", get(health))
+        .route("/openapi.json", get(openapi_spec))
         .route(
             "/v1/admin/webhooks",
             get(list_merchant_webhooks).post(create_merchant_webhook),
@@ -1101,5 +1190,24 @@ mod page_tests {
         assert!(html.contains("99.00"));
         assert!(html.contains("alipay"));
         assert!(html.contains("wxpay"));
+    }
+
+    #[test]
+    fn rate_limiter_enforces_fixed_window_and_resets() {
+        let limiter = RateLimiter::default();
+        assert!(limiter.allow_at("checkout:1.2.3.4", 2, 60, 120));
+        assert!(limiter.allow_at("checkout:1.2.3.4", 2, 60, 121));
+        assert!(!limiter.allow_at("checkout:1.2.3.4", 2, 60, 122));
+        assert!(limiter.allow_at("checkout:1.2.3.4", 2, 60, 180));
+        assert!(limiter.allow_at("checkout:5.6.7.8", 2, 60, 122));
+    }
+
+    #[test]
+    fn embedded_openapi_document_is_valid_json_and_v1() {
+        let value: serde_json::Value =
+            serde_json::from_str(include_str!("../../../docs/openapi.json")).unwrap();
+        assert_eq!(value["openapi"], "3.1.0");
+        assert!(value["paths"]["/v1/checkout/sessions"].is_object());
+        assert!(value["paths"]["/v1/admin/webhook-deliveries/{id}/redeliver"].is_object());
     }
 }
