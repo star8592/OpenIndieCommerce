@@ -1,0 +1,663 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "OpenIndieCommerce API",
+    "version": "0.1.0",
+    "description": "Self-hosted commerce orchestration API for indie websites, desktop software, digital products and SaaS."
+  },
+  "servers": [
+    {
+      "url": "https://commerce.example.com"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Checkout"
+    },
+    {
+      "name": "Admin"
+    },
+    {
+      "name": "Entitlements"
+    },
+    {
+      "name": "Provider Webhooks"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health check",
+        "responses": {
+          "200": {
+            "description": "Database healthy"
+          },
+          "503": {
+            "description": "Database unavailable"
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "summary": "OpenAPI document",
+        "responses": {
+          "200": {
+            "description": "OpenAPI 3.1 document"
+          }
+        }
+      }
+    },
+    "/v1/admin/products": {
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Create product",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProduct"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Created product",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Product"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/prices": {
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Create price",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePrice"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Created price",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Price"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/webhooks": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "List merchant webhook endpoints",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Webhook endpoints"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Register merchant webhook endpoint",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Registration including one-time secret"
+          }
+        }
+      }
+    },
+    "/v1/admin/webhooks/{id}": {
+      "patch": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Enable or disable webhook endpoint",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "active"
+                ],
+                "properties": {
+                  "active": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated endpoint"
+          },
+          "404": {
+            "description": "Endpoint not found"
+          }
+        }
+      }
+    },
+    "/v1/admin/webhook-deliveries": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "List recent webhook deliveries",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recent deliveries"
+          }
+        }
+      }
+    },
+    "/v1/admin/webhook-deliveries/{id}/redeliver": {
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Queue a delivery for redelivery",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Delivery reset to pending"
+          },
+          "404": {
+            "description": "Delivery not found"
+          }
+        }
+      }
+    },
+    "/v1/checkout/sessions": {
+      "post": {
+        "tags": [
+          "Checkout"
+        ],
+        "summary": "Create checkout session",
+        "description": "Rate limited per client IP. Default expiry 1800 seconds.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCheckoutSession"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Checkout session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckoutSessionResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          }
+        }
+      }
+    },
+    "/v1/checkout/sessions/{id}": {
+      "get": {
+        "tags": [
+          "Checkout"
+        ],
+        "summary": "Get checkout session",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Checkout session"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/checkout/{id}": {
+      "get": {
+        "tags": [
+          "Checkout"
+        ],
+        "summary": "Hosted checkout page",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Hosted provider checkout"
+          },
+          "410": {
+            "description": "Checkout session expired or closed"
+          }
+        }
+      }
+    },
+    "/v1/licenses/claim": {
+      "post": {
+        "tags": [
+          "Entitlements"
+        ],
+        "summary": "Claim paid-order license",
+        "responses": {
+          "200": {
+            "description": "Issued license"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "503": {
+            "description": "Entitlement module disabled"
+          }
+        }
+      }
+    },
+    "/v1/licenses/activate": {
+      "post": {
+        "tags": [
+          "Entitlements"
+        ],
+        "summary": "Activate license instance",
+        "responses": {
+          "200": {
+            "description": "Activation"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          }
+        }
+      }
+    },
+    "/v1/licenses/validate": {
+      "post": {
+        "tags": [
+          "Entitlements"
+        ],
+        "summary": "Validate active instance",
+        "responses": {
+          "200": {
+            "description": "Validation result"
+          }
+        }
+      }
+    },
+    "/v1/licenses/deactivate": {
+      "post": {
+        "tags": [
+          "Entitlements"
+        ],
+        "summary": "Deactivate instance",
+        "responses": {
+          "200": {
+            "description": "Deactivation result"
+          }
+        }
+      }
+    },
+    "/v1/webhooks/paddle": {
+      "post": {
+        "tags": [
+          "Provider Webhooks"
+        ],
+        "summary": "Paddle signed webhook",
+        "responses": {
+          "200": {
+            "description": "Accepted"
+          },
+          "401": {
+            "description": "Invalid signature"
+          }
+        }
+      }
+    },
+    "/v1/webhooks/zpay": {
+      "get": {
+        "tags": [
+          "Provider Webhooks"
+        ],
+        "summary": "ZPAY signed async callback",
+        "responses": {
+          "200": {
+            "description": "Accepted"
+          },
+          "400": {
+            "description": "Invalid signature or amount"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "schemas": {
+      "CreateProduct": {
+        "type": "object",
+        "required": [
+          "name",
+          "fulfillment"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "fulfillment": {
+            "type": "string",
+            "enum": [
+              "none",
+              "download",
+              "entitlement",
+              "license"
+            ]
+          }
+        }
+      },
+      "Product": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "fulfillment"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "fulfillment": {
+            "type": "string"
+          }
+        }
+      },
+      "CreatePrice": {
+        "type": "object",
+        "required": [
+          "productId",
+          "provider",
+          "currency",
+          "unitAmount"
+        ],
+        "properties": {
+          "productId": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3
+          },
+          "unitAmount": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "providerPriceId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "Price": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "productId": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "unitAmount": {
+            "type": "integer"
+          },
+          "providerPriceId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "CreateCheckoutSession": {
+        "type": "object",
+        "required": [
+          "priceId",
+          "email"
+        ],
+        "properties": {
+          "priceId": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "successUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri"
+          },
+          "cancelUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "expiresInSeconds": {
+            "type": "integer",
+            "minimum": 60,
+            "maximum": 86400,
+            "default": 1800
+          }
+        }
+      },
+      "CheckoutSession": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "priceId": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "completed",
+              "expired"
+            ]
+          },
+          "successUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cancelUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "expiresAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "CheckoutSessionResponse": {
+        "type": "object",
+        "properties": {
+          "session": {
+            "$ref": "#/components/schemas/CheckoutSession"
+          },
+          "price": {
+            "$ref": "#/components/schemas/Price"
+          },
+          "product": {
+            "$ref": "#/components/schemas/Product"
+          },
+          "checkoutUrl": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

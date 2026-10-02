@@ -41,6 +41,7 @@ pub struct CheckoutSession {
     pub success_url: Option<String>,
     pub cancel_url: Option<String>,
     pub metadata: serde_json::Value,
+    pub expires_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -88,6 +89,20 @@ pub struct PendingWebhookDelivery {
     pub attempts: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WebhookDeliveryStatus {
+    pub id: String,
+    pub event_id: String,
+    pub endpoint_id: String,
+    pub status: String,
+    pub attempts: u32,
+    pub last_error: Option<String>,
+    pub delivered_at: Option<i64>,
+}
+
+pub const DEFAULT_CHECKOUT_TTL_SECONDS: i64 = 30 * 60;
+
 fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -114,11 +129,15 @@ impl CommerceStore {
         connection.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;
         CREATE TABLE IF NOT EXISTS products(id TEXT PRIMARY KEY,name TEXT NOT NULL,description TEXT NOT NULL,fulfillment TEXT NOT NULL,created_at INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS prices(id TEXT PRIMARY KEY,product_id TEXT NOT NULL REFERENCES products(id),provider TEXT NOT NULL,currency TEXT NOT NULL,unit_amount INTEGER NOT NULL,provider_price_id TEXT,active INTEGER NOT NULL DEFAULT 1,created_at INTEGER NOT NULL);
-        CREATE TABLE IF NOT EXISTS checkout_sessions(id TEXT PRIMARY KEY,price_id TEXT NOT NULL REFERENCES prices(id),email TEXT NOT NULL,provider TEXT NOT NULL,status TEXT NOT NULL,success_url TEXT,cancel_url TEXT,metadata_json TEXT NOT NULL,created_at INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS checkout_sessions(id TEXT PRIMARY KEY,price_id TEXT NOT NULL REFERENCES prices(id),email TEXT NOT NULL,provider TEXT NOT NULL,status TEXT NOT NULL,success_url TEXT,cancel_url TEXT,metadata_json TEXT NOT NULL,created_at INTEGER NOT NULL,expires_at INTEGER);
         CREATE TABLE IF NOT EXISTS commerce_orders(id TEXT PRIMARY KEY,provider TEXT NOT NULL,provider_order_id TEXT NOT NULL,checkout_session_id TEXT REFERENCES checkout_sessions(id),price_id TEXT NOT NULL REFERENCES prices(id),email TEXT NOT NULL,currency TEXT NOT NULL,amount INTEGER NOT NULL,status TEXT NOT NULL,created_at INTEGER NOT NULL,UNIQUE(provider,provider_order_id));
         CREATE TABLE IF NOT EXISTS commerce_events(id TEXT PRIMARY KEY,event_type TEXT NOT NULL,order_id TEXT NOT NULL REFERENCES commerce_orders(id),payload_json TEXT NOT NULL,created_at INTEGER NOT NULL,UNIQUE(event_type,order_id));
         CREATE TABLE IF NOT EXISTS merchant_webhook_endpoints(id TEXT PRIMARY KEY,url TEXT NOT NULL,secret TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1,created_at INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS webhook_deliveries(id TEXT PRIMARY KEY,event_id TEXT NOT NULL REFERENCES commerce_events(id),endpoint_id TEXT NOT NULL REFERENCES merchant_webhook_endpoints(id),status TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at INTEGER NOT NULL,last_error TEXT,created_at INTEGER NOT NULL,delivered_at INTEGER,UNIQUE(event_id,endpoint_id));")?;
+        let _ = connection.execute(
+            "ALTER TABLE checkout_sessions ADD COLUMN expires_at INTEGER",
+            [],
+        );
         Ok(Self {
             db: Arc::new(Mutex::new(connection)),
         })
@@ -196,15 +215,33 @@ impl CommerceStore {
 
     pub fn checkout_session(&self, id: &str) -> Result<CheckoutSession> {
         let db = self.db.lock().unwrap();
-        db.query_row(
-            "SELECT id,price_id,email,provider,status,success_url,cancel_url,metadata_json FROM checkout_sessions WHERE id=?1",
+        let mut session = db.query_row(
+            "SELECT id,price_id,email,provider,status,success_url,cancel_url,metadata_json,expires_at FROM checkout_sessions WHERE id=?1",
             params![id],
             |r| {
-                let raw:String=r.get(7)?;
-                let metadata=serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
-                Ok(CheckoutSession{id:r.get(0)?,price_id:r.get(1)?,email:r.get(2)?,provider:r.get(3)?,status:r.get(4)?,success_url:r.get(5)?,cancel_url:r.get(6)?,metadata})
-            }
-        ).optional()?.context("checkout session not found")
+                let raw: String = r.get(7)?;
+                let metadata = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+                Ok(CheckoutSession {
+                    id: r.get(0)?,
+                    price_id: r.get(1)?,
+                    email: r.get(2)?,
+                    provider: r.get(3)?,
+                    status: r.get(4)?,
+                    success_url: r.get(5)?,
+                    cancel_url: r.get(6)?,
+                    metadata,
+                    expires_at: r.get(8)?,
+                })
+            },
+        ).optional()?.context("checkout session not found")?;
+        if session.status == "open" && session.expires_at.is_some_and(|expires| expires <= now()) {
+            db.execute(
+                "UPDATE checkout_sessions SET status='expired' WHERE id=?1 AND status='open'",
+                params![id],
+            )?;
+            session.status = "expired".into();
+        }
+        Ok(session)
     }
 
     pub fn price(&self, id: &str) -> Result<Price> {
@@ -218,8 +255,32 @@ impl CommerceStore {
         cancel_url: Option<&str>,
         metadata: serde_json::Value,
     ) -> Result<CheckoutSession> {
+        self.create_checkout_session_with_ttl(
+            price_id,
+            email,
+            success_url,
+            cancel_url,
+            metadata,
+            DEFAULT_CHECKOUT_TTL_SECONDS,
+        )
+    }
+
+    pub fn create_checkout_session_with_ttl(
+        &self,
+        price_id: &str,
+        email: &str,
+        success_url: Option<&str>,
+        cancel_url: Option<&str>,
+        metadata: serde_json::Value,
+        ttl_seconds: i64,
+    ) -> Result<CheckoutSession> {
         anyhow::ensure!(email.trim().contains('@'), "valid email is required");
+        anyhow::ensure!(
+            (60..=86_400).contains(&ttl_seconds),
+            "checkout TTL must be 60..=86400 seconds"
+        );
         let price = self.price(price_id)?;
+        let expires_at = now() + ttl_seconds;
         let s = CheckoutSession {
             id: random_id("cs"),
             price_id: price.id,
@@ -229,11 +290,16 @@ impl CommerceStore {
             success_url: success_url.map(str::to_string),
             cancel_url: cancel_url.map(str::to_string),
             metadata,
+            expires_at: Some(expires_at),
         };
         let metadata_json = serde_json::to_string(&s.metadata)?;
-        self.db.lock().unwrap().execute("INSERT INTO checkout_sessions(id,price_id,email,provider,status,success_url,cancel_url,metadata_json,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![s.id,s.price_id,s.email,s.provider,s.status,s.success_url,s.cancel_url,metadata_json,now()])?;
+        self.db.lock().unwrap().execute(
+            "INSERT INTO checkout_sessions(id,price_id,email,provider,status,success_url,cancel_url,metadata_json,created_at,expires_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+            params![s.id,s.price_id,s.email,s.provider,s.status,s.success_url,s.cancel_url,metadata_json,now(),expires_at],
+        )?;
         Ok(s)
     }
+
     pub fn register_webhook(
         &self,
         url: &str,
@@ -259,6 +325,77 @@ impl CommerceStore {
             params![endpoint.id, endpoint.url, endpoint.secret, now()],
         )?;
         Ok(endpoint)
+    }
+
+    pub fn list_webhooks(&self) -> Result<Vec<MerchantWebhookEndpoint>> {
+        let db = self.db.lock().unwrap();
+        let mut stmt = db.prepare(
+            "SELECT id,url,secret,active FROM merchant_webhook_endpoints ORDER BY created_at,id",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(MerchantWebhookEndpoint {
+                id: r.get(0)?,
+                url: r.get(1)?,
+                secret: r.get(2)?,
+                active: r.get::<_, i64>(3)? != 0,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn set_webhook_active(&self, id: &str, active: bool) -> Result<MerchantWebhookEndpoint> {
+        let db = self.db.lock().unwrap();
+        let changed = db.execute(
+            "UPDATE merchant_webhook_endpoints SET active=?1 WHERE id=?2",
+            params![if active { 1 } else { 0 }, id],
+        )?;
+        anyhow::ensure!(changed == 1, "webhook endpoint not found");
+        db.query_row(
+            "SELECT id,url,secret,active FROM merchant_webhook_endpoints WHERE id=?1",
+            params![id],
+            |r| {
+                Ok(MerchantWebhookEndpoint {
+                    id: r.get(0)?,
+                    url: r.get(1)?,
+                    secret: r.get(2)?,
+                    active: r.get::<_, i64>(3)? != 0,
+                })
+            },
+        )
+        .map_err(Into::into)
+    }
+
+    pub fn recent_webhook_deliveries(&self, limit: u32) -> Result<Vec<WebhookDeliveryStatus>> {
+        let db = self.db.lock().unwrap();
+        let mut stmt = db.prepare(
+            "SELECT id,event_id,endpoint_id,status,attempts,last_error,delivered_at FROM webhook_deliveries ORDER BY created_at DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit.clamp(1, 500)], |r| {
+            Ok(WebhookDeliveryStatus {
+                id: r.get(0)?,
+                event_id: r.get(1)?,
+                endpoint_id: r.get(2)?,
+                status: r.get(3)?,
+                attempts: r.get(4)?,
+                last_error: r.get(5)?,
+                delivered_at: r.get(6)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn redeliver_webhook(&self, id: &str) -> Result<WebhookDeliveryStatus> {
+        let db = self.db.lock().unwrap();
+        let changed = db.execute(
+            "UPDATE webhook_deliveries SET status='pending',next_attempt_at=?1,last_error=NULL,delivered_at=NULL WHERE id=?2",
+            params![now(), id],
+        )?;
+        anyhow::ensure!(changed == 1, "webhook delivery not found");
+        db.query_row(
+            "SELECT id,event_id,endpoint_id,status,attempts,last_error,delivered_at FROM webhook_deliveries WHERE id=?1",
+            params![id],
+            |r| Ok(WebhookDeliveryStatus { id:r.get(0)?,event_id:r.get(1)?,endpoint_id:r.get(2)?,status:r.get(3)?,attempts:r.get(4)?,last_error:r.get(5)?,delivered_at:r.get(6)? }),
+        ).map_err(Into::into)
     }
 
     pub fn pending_webhook_deliveries(&self, limit: u32) -> Result<Vec<PendingWebhookDelivery>> {
@@ -363,11 +500,11 @@ impl CommerceStore {
     ) -> Result<(CanonicalOrder, bool, CommerceEvent)> {
         let mut db = self.db.lock().unwrap();
         let tx = db.transaction()?;
-        let session: (String, String, String, String) = tx
+        let session: (String, String, String, String, Option<i64>) = tx
             .query_row(
-                "SELECT price_id,email,status,metadata_json FROM checkout_sessions WHERE id=?1",
+                "SELECT price_id,email,status,metadata_json,expires_at FROM checkout_sessions WHERE id=?1",
                 params![session_id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
             )
             .context("checkout session not found")?;
         let price:Price=tx.query_row("SELECT id,product_id,provider,currency,unit_amount,provider_price_id FROM prices WHERE id=?1",params![session.0],|r|Ok(Price{id:r.get(0)?,product_id:r.get(1)?,provider:r.get(2)?,currency:r.get(3)?,unit_amount:r.get(4)?,provider_price_id:r.get(5)?}))?;
@@ -382,6 +519,11 @@ impl CommerceStore {
         let inserted = existing.is_none();
         let order_id = existing.unwrap_or_else(|| random_id("ord"));
         if inserted {
+            anyhow::ensure!(session.2 == "open", "checkout session is not open");
+            anyhow::ensure!(
+                session.4.is_none_or(|expires| expires > now()),
+                "checkout session expired"
+            );
             tx.execute("INSERT INTO commerce_orders(id,provider,provider_order_id,checkout_session_id,price_id,email,currency,amount,status,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'paid',?9)",params![order_id,provider,provider_order_id,session_id,price.id,session.1,price.currency,price.unit_amount,now()])?;
             tx.execute(
                 "UPDATE checkout_sessions SET status='completed' WHERE id=?1",
@@ -497,6 +639,92 @@ mod tests {
             .unwrap();
         assert!(!changed_again);
         assert_eq!(s.pending_webhook_deliveries(10).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn webhook_management_and_redelivery_are_recoverable() {
+        let s = CommerceStore::memory().unwrap();
+        let endpoint = s
+            .register_webhook("https://shop.example/hooks", Some("secret"))
+            .unwrap();
+        assert_eq!(s.list_webhooks().unwrap().len(), 1);
+        assert!(!s.set_webhook_active(&endpoint.id, false).unwrap().active);
+        let p = s.create_product("Report", "", "download").unwrap();
+        let price = s
+            .create_price(&p.id, "paddle", "USD", 1900, Some("pri_1"))
+            .unwrap();
+        let cs = s
+            .create_checkout_session(&price.id, "a@b.com", None, None, serde_json::json!({}))
+            .unwrap();
+        s.record_paid_order("paddle", "txn_disabled", &cs.id)
+            .unwrap();
+        assert!(s.pending_webhook_deliveries(10).unwrap().is_empty());
+
+        assert!(s.set_webhook_active(&endpoint.id, true).unwrap().active);
+        let cs2 = s
+            .create_checkout_session(&price.id, "a@b.com", None, None, serde_json::json!({}))
+            .unwrap();
+        s.record_paid_order("paddle", "txn_enabled", &cs2.id)
+            .unwrap();
+        let pending = s.pending_webhook_deliveries(10).unwrap();
+        assert_eq!(pending.len(), 1);
+        s.mark_webhook_delivered(&pending[0].id).unwrap();
+        let recent = s.recent_webhook_deliveries(10).unwrap();
+        assert_eq!(recent[0].status, "delivered");
+        let replay = s.redeliver_webhook(&pending[0].id).unwrap();
+        assert_eq!(replay.status, "pending");
+        assert_eq!(s.pending_webhook_deliveries(10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn checkout_expiry_blocks_new_payment_but_not_idempotent_retry() {
+        let s = CommerceStore::memory().unwrap();
+        let p = s.create_product("Report", "", "download").unwrap();
+        let price = s
+            .create_price(&p.id, "paddle", "USD", 1900, Some("pri_1"))
+            .unwrap();
+        let expired = s
+            .create_checkout_session_with_ttl(
+                &price.id,
+                "a@b.com",
+                None,
+                None,
+                serde_json::json!({}),
+                60,
+            )
+            .unwrap();
+        s.db.lock()
+            .unwrap()
+            .execute(
+                "UPDATE checkout_sessions SET expires_at=?1 WHERE id=?2",
+                params![now() - 1, expired.id],
+            )
+            .unwrap();
+        assert_eq!(s.checkout_session(&expired.id).unwrap().status, "expired");
+        assert!(
+            s.record_paid_order("paddle", "txn_expired", &expired.id)
+                .is_err()
+        );
+
+        let paid = s
+            .create_checkout_session(&price.id, "a@b.com", None, None, serde_json::json!({}))
+            .unwrap();
+        assert!(
+            s.record_paid_order("paddle", "txn_paid_retry", &paid.id)
+                .unwrap()
+                .1
+        );
+        s.db.lock()
+            .unwrap()
+            .execute(
+                "UPDATE checkout_sessions SET expires_at=?1 WHERE id=?2",
+                params![now() - 1, paid.id],
+            )
+            .unwrap();
+        let (_, inserted_again, _) = s
+            .record_paid_order("paddle", "txn_paid_retry", &paid.id)
+            .unwrap();
+        assert!(!inserted_again);
     }
 
     #[test]
