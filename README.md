@@ -64,6 +64,8 @@ cargo run -p openindiecommerce-server
 Add only the payment rails you need. The optional license/entitlement module does not need to be configured for a normal web store.
 
 See `docs/API.md` for Product, Price, Checkout Session and merchant webhook examples.
+
+For payment-rail onboarding, `scripts/provider_acceptance.py` provides a fail-closed provider acceptance harness. Start with `--provider dodo --dry-run`; after Dodo test credentials and a test product exist, run without `--dry-run` to obtain a real test checkout URL. Live Dodo runs require explicit `--allow-live`.
 ## Security model
 
 - Payment-provider API/webhook secrets stay server-side.

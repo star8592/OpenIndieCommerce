@@ -39,6 +39,7 @@ struct AppState {
     dodo_api_key: Option<Arc<String>>,
     dodo_webhook_secret: Option<Arc<String>>,
     dodo_base_url: Arc<String>,
+    dodo_environment: Arc<String>,
     dodo_signature_tolerance_seconds: u64,
     dodo_http_client: reqwest::Client,
     zpay_pid: Option<Arc<String>>,
@@ -183,6 +184,20 @@ struct ListDeliveriesQuery {
 #[derive(Debug, Serialize)]
 struct Health {
     ok: bool,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct ProviderStatus {
+    provider: &'static str,
+    configured: bool,
+    mode: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderStatusResponse {
+    providers: Vec<ProviderStatus>,
 }
 
 #[derive(Debug, Clone)]
@@ -443,6 +458,35 @@ async fn create_merchant_webhook(
         url,
         secret,
         active,
+    }))
+}
+
+async fn provider_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<ProviderStatusResponse> {
+    require_admin(&headers, &state.admin_token)?;
+    Ok(Json(ProviderStatusResponse {
+        providers: vec![
+            ProviderStatus {
+                provider: "paddle",
+                configured: state.paddle_client_token.is_some()
+                    && state.paddle_webhook_secret.is_some(),
+                mode: None,
+            },
+            ProviderStatus {
+                provider: "dodo",
+                configured: state.dodo_api_key.is_some() && state.dodo_webhook_secret.is_some(),
+                mode: Some(state.dodo_environment.as_ref().clone()),
+            },
+            ProviderStatus {
+                provider: "zpay",
+                configured: state.zpay_pid.is_some()
+                    && state.zpay_key.is_some()
+                    && state.zpay_public_base_url.is_some(),
+                mode: None,
+            },
+        ],
     }))
 }
 
@@ -1138,10 +1182,15 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(paddle::DEFAULT_SIGNATURE_TOLERANCE_SECONDS);
     let dodo_api_key = optional_secret_value("OIC_DODO_API_KEY")?.map(Arc::new);
     let dodo_webhook_secret = optional_secret_value("OIC_DODO_WEBHOOK_SECRET")?.map(Arc::new);
+    let dodo_environment = Arc::new(match env::var("OIC_DODO_ENV").as_deref() {
+        Ok("live") => "live".to_string(),
+        _ => "test".to_string(),
+    });
     let dodo_base_url = Arc::new(env::var("OIC_DODO_BASE_URL").unwrap_or_else(|_| {
-        match env::var("OIC_DODO_ENV").as_deref() {
-            Ok("live") => dodo::LIVE_BASE_URL.to_string(),
-            _ => dodo::TEST_BASE_URL.to_string(),
+        if dodo_environment.as_str() == "live" {
+            dodo::LIVE_BASE_URL.to_string()
+        } else {
+            dodo::TEST_BASE_URL.to_string()
         }
     }));
     let dodo_signature_tolerance_seconds = env::var("OIC_DODO_WEBHOOK_TOLERANCE_SECONDS")
@@ -1175,6 +1224,7 @@ async fn main() -> anyhow::Result<()> {
         dodo_api_key,
         dodo_webhook_secret,
         dodo_base_url,
+        dodo_environment,
         dodo_signature_tolerance_seconds,
         dodo_http_client,
         zpay_pid,
@@ -1191,6 +1241,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/refund", get(refund))
         .route("/health", get(health))
         .route("/openapi.json", get(openapi_spec))
+        .route("/v1/admin/providers", get(provider_status))
         .route(
             "/v1/admin/webhooks",
             get(list_merchant_webhooks).post(create_merchant_webhook),
@@ -1252,6 +1303,34 @@ mod page_tests {
         assert!(privacy.contains("Commerce data"));
         assert!(refund.contains("14 days"));
         assert!(!home.contains("$19"));
+    }
+
+    #[test]
+    fn provider_status_response_never_contains_secrets() {
+        let response = ProviderStatusResponse {
+            providers: vec![
+                ProviderStatus {
+                    provider: "paddle",
+                    configured: true,
+                    mode: None,
+                },
+                ProviderStatus {
+                    provider: "dodo",
+                    configured: true,
+                    mode: Some("test".into()),
+                },
+                ProviderStatus {
+                    provider: "zpay",
+                    configured: false,
+                    mode: None,
+                },
+            ],
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"provider\":\"dodo\""));
+        assert!(json.contains("\"mode\":\"test\""));
+        assert!(!json.contains("secret"));
+        assert!(!json.contains("apiKey"));
     }
 
     #[test]
