@@ -18,9 +18,9 @@
 - [ ] real Paddle sandbox end-to-end transaction
 - [ ] real Paddle live merchant onboarding + payout validation
 - [ ] real ZPAY merchant transaction + settlement validation
-- [ ] webhook endpoint management/list/disable API
-- [ ] event replay / manual redelivery endpoint
-- [ ] checkout-session expiry
+- [x] webhook endpoint management/list/disable API
+- [x] event replay / manual redelivery endpoint
+- [x] checkout-session expiry
 - [ ] rate limiting / abuse protection
 - [ ] API versioning policy and OpenAPI specification
 

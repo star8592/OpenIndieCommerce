@@ -83,7 +83,8 @@ ZPAY example:
   "metadata": {
     "userId": "user_123",
     "campaign": "x-launch"
-  }
+  },
+  "expiresInSeconds": 1800
 }
 ```
 
@@ -136,3 +137,18 @@ Example normalized event:
   }
 }
 ```
+
+
+## Checkout expiry
+
+Checkout Sessions expire after 30 minutes by default. `expiresInSeconds` may be set from 60 to 86400 seconds. Expired sessions return status `expired` and hosted checkout returns HTTP 410. A provider webhook cannot create a new paid order from an expired session, while retries for an already-recorded provider order remain idempotent.
+
+## Manage merchant webhooks
+
+List endpoints: `GET /v1/admin/webhooks`. Secrets are never returned by this endpoint.
+
+Enable or disable an endpoint: `PATCH /v1/admin/webhooks/{id}` with `{ "active": false }`. Disabled endpoints stop receiving queued or future deliveries until re-enabled.
+
+Inspect recent deliveries: `GET /v1/admin/webhook-deliveries?limit=100`.
+
+Replay one delivery: `POST /v1/admin/webhook-deliveries/{id}/redeliver`. Redelivery resets the existing delivery to `pending`; it does not create a duplicate commerce event.

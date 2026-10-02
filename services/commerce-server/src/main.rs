@@ -6,11 +6,14 @@ use axum::{
     extract::{Path as AxumPath, Query, State},
     http::{HeaderMap, StatusCode},
     response::Html,
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 use openindiecommerce_server::{
     ActivateRequest, ClaimRequest, DEFAULT_MAX_ACTIVATIONS, InstanceRequest, LicenseStore,
-    commerce::{CheckoutSession, CommerceStore, MerchantWebhookEndpoint, Price, Product},
+    commerce::{
+        CheckoutSession, CommerceStore, DEFAULT_CHECKOUT_TTL_SECONDS, MerchantWebhookEndpoint,
+        Price, Product, WebhookDeliveryStatus,
+    },
     paddle::{self, PaddleEvent},
     zpay,
 };
@@ -58,6 +61,7 @@ struct CreateCheckoutSessionRequest {
     success_url: Option<String>,
     cancel_url: Option<String>,
     metadata: Option<serde_json::Value>,
+    expires_in_seconds: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -83,6 +87,17 @@ struct MerchantWebhookRegistration {
     url: String,
     secret: String,
     active: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateMerchantWebhookRequest {
+    active: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ListDeliveriesQuery {
+    limit: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -344,6 +359,58 @@ async fn create_merchant_webhook(
     }))
 }
 
+async fn list_merchant_webhooks(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Vec<MerchantWebhookEndpoint>> {
+    require_admin(&headers, &state.admin_token)?;
+    state
+        .commerce
+        .list_webhooks()
+        .map(Json)
+        .map_err(|e| api_error(StatusCode::BAD_REQUEST, e))
+}
+
+async fn update_merchant_webhook(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+    Json(request): Json<UpdateMerchantWebhookRequest>,
+) -> ApiResult<MerchantWebhookEndpoint> {
+    require_admin(&headers, &state.admin_token)?;
+    state
+        .commerce
+        .set_webhook_active(&id, request.active)
+        .map(Json)
+        .map_err(|e| api_error(StatusCode::NOT_FOUND, e))
+}
+
+async fn list_webhook_deliveries(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ListDeliveriesQuery>,
+) -> ApiResult<Vec<WebhookDeliveryStatus>> {
+    require_admin(&headers, &state.admin_token)?;
+    state
+        .commerce
+        .recent_webhook_deliveries(query.limit.unwrap_or(100))
+        .map(Json)
+        .map_err(|e| api_error(StatusCode::BAD_REQUEST, e))
+}
+
+async fn redeliver_webhook(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+) -> ApiResult<WebhookDeliveryStatus> {
+    require_admin(&headers, &state.admin_token)?;
+    state
+        .commerce
+        .redeliver_webhook(&id)
+        .map(Json)
+        .map_err(|e| api_error(StatusCode::NOT_FOUND, e))
+}
+
 async fn dispatch_webhooks_once(store: &CommerceStore, client: &reqwest::Client) -> usize {
     let Ok(deliveries) = store.pending_webhook_deliveries(50) else {
         return 0;
@@ -432,12 +499,15 @@ async fn create_checkout_session(
 ) -> ApiResult<CheckoutSessionResponse> {
     let session = state
         .commerce
-        .create_checkout_session(
+        .create_checkout_session_with_ttl(
             &request.price_id,
             &request.email,
             request.success_url.as_deref(),
             request.cancel_url.as_deref(),
             request.metadata.unwrap_or_else(|| serde_json::json!({})),
+            request
+                .expires_in_seconds
+                .unwrap_or(DEFAULT_CHECKOUT_TTL_SECONDS),
         )
         .map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?;
     let price = state
@@ -595,6 +665,12 @@ async fn hosted_checkout(
         .commerce
         .checkout_session(&id)
         .map_err(|e| api_error(StatusCode::NOT_FOUND, e))?;
+    if session.status != "open" {
+        return Err(api_error(
+            StatusCode::GONE,
+            format!("checkout session is {}", session.status),
+        ));
+    }
     let price = state
         .commerce
         .price(&session.price_id)
@@ -888,7 +964,16 @@ async fn main() -> anyhow::Result<()> {
         .route("/privacy", get(privacy))
         .route("/refund", get(refund))
         .route("/health", get(health))
-        .route("/v1/admin/webhooks", post(create_merchant_webhook))
+        .route(
+            "/v1/admin/webhooks",
+            get(list_merchant_webhooks).post(create_merchant_webhook),
+        )
+        .route("/v1/admin/webhooks/{id}", patch(update_merchant_webhook))
+        .route("/v1/admin/webhook-deliveries", get(list_webhook_deliveries))
+        .route(
+            "/v1/admin/webhook-deliveries/{id}/redeliver",
+            post(redeliver_webhook),
+        )
         .route("/v1/admin/products", post(create_product))
         .route("/v1/admin/prices", post(create_price))
         .route("/v1/checkout/sessions", post(create_checkout_session))
@@ -952,6 +1037,7 @@ mod page_tests {
             success_url: None,
             cancel_url: None,
             metadata: serde_json::json!({}),
+            expires_at: Some(i64::MAX),
         };
         let product = Product {
             id: "prod_1".into(),
@@ -985,6 +1071,7 @@ mod page_tests {
             success_url: None,
             cancel_url: None,
             metadata: serde_json::json!({}),
+            expires_at: Some(i64::MAX),
         };
         let product = Product {
             id: "prod_1".into(),
