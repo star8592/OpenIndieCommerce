@@ -1,27 +1,67 @@
-# Production deployment
+# Production deployment assets
 
-OpenIndieCommerce production deployment is intentionally small: one Rust binary, one SQLite database, file-backed secrets, systemd, and Caddy TLS termination.
+This directory contains the concrete files used by the OpenIndieCommerce single-node production deployment.
+
+For the full installation procedure, topology, secret handling, Caddy, systemd, backups, monitoring and launch checklist, read:
+
+**[`../docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md)**
+
+## Intended topology
+
+```text
+Internet
+   |
+ Caddy HTTPS
+   |
+127.0.0.1:18791
+   |
+OpenIndieCommerce
+   |
+SQLite WAL
+```
+
+OpenIndieCommerce production deployment is intentionally small: one Rust binary, one SQLite database, file-backed secrets, systemd and Caddy TLS termination.
 
 ## Layout
+
 - binary: `/opt/openindiecommerce/bin/openindiecommerce-server`
 - helpers: `/opt/openindiecommerce/deploy/`
 - config: `/etc/openindiecommerce/openindiecommerce.env`
-- secrets: `/etc/openindiecommerce/secrets/*` (`0600`, root-owned)
+- secrets: `/etc/openindiecommerce/secrets/*`
 - database: `/var/lib/openindiecommerce/openindiecommerce.sqlite3`
 - backups: `/var/backups/openindiecommerce/`
 
-The service listens on localhost by default. Caddy is the public HTTPS edge and the example blocks `/v1/admin/*` from the public internet.
+The service should listen on localhost. Caddy is the public HTTPS edge. The supplied edge example is intended to keep `/v1/admin/*` off the public internet.
 
-## First boot
-1. Create system user/group `openindiecommerce` and the directories above.
-2. Copy the release binary and deployment helpers.
-3. Generate an admin token. Generate an entitlement key secret only if the optional license module is used.
-4. Copy the environment example and configure at least one payment rail.
-5. Run `deploy/scripts/preflight.sh`.
-6. Enable the systemd service and backup timer, then configure Caddy.
-7. Verify HTTPS `/health` and run a sandbox or low-value transaction before public sales.
+## Directory contents
+
+```text
+deploy/
+  caddy/      reverse-proxy / HTTPS example
+  env/        production environment template
+  scripts/    preflight, backup and verification helpers
+  systemd/    service / timer templates
+```
+
+## First boot summary
+
+1. Create the `openindiecommerce` system user/group.
+2. Create the production directories.
+3. Install a tested release binary.
+4. Create file-backed secrets.
+5. Copy and fill `env/openindiecommerce.env.example`.
+6. Configure at least one payment rail.
+7. Run `scripts/preflight.sh`.
+8. Install/enable systemd service and backup timer.
+9. Configure Caddy and HTTPS.
+10. Verify `/health`.
+11. Run provider sandbox/test acceptance.
+12. Complete a low-value real transaction before public launch.
 
 ## Backups
-`backup_state.py` uses SQLite's online backup API, safe with WAL enabled. If the optional entitlement secret is configured it is included because deterministic license recovery depends on it.
 
-Run `verify_backup.py <archive>` after copying a backup off-host, and periodically perform a restore drill on a disposable host.
+`backup_state.py` uses SQLite's online backup API, which is safe with WAL enabled. If deterministic entitlement/license recovery depends on the entitlement secret, that secret is part of the recovery set.
+
+Always verify copied backups and periodically perform a restore drill on a disposable host.
+
+See [`../docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md) for the complete operational procedure.

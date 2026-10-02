@@ -2,6 +2,8 @@
 
 OpenIndieCommerce gives a storefront one API for products, prices, checkout sessions and normalized order events.
 
+If this is your first time using the project, start with [`QUICKSTART.md`](QUICKSTART.md). For an independent website, continue with [`WEB_INTEGRATION.md`](WEB_INTEGRATION.md).
+
 ## Core flow
 
 ```text
@@ -21,6 +23,7 @@ signed merchant webhook → your website
 ```
 
 Money is represented in minor units: USD 19.00 = `1900`, CNY 99.00 = `9900`.
+
 ## Admin authentication
 
 Admin endpoints use:
@@ -44,6 +47,7 @@ The admin API should not be exposed publicly without an authenticated edge. The 
 ```
 
 Supported v0.1 fulfillment hints: `none`, `download`, `entitlement`, `license`.
+
 ## Create a price
 
 `POST /v1/admin/prices`
@@ -106,6 +110,7 @@ For Dodo, `providerPriceId` is the Dodo product ID. OpenIndieCommerce creates a 
 The response includes a canonical session and `checkoutUrl` such as `/checkout/cs_...`.
 
 The metadata is included in the normalized `order.paid` merchant webhook so the storefront can map a purchase back to its own user or campaign.
+
 ## Register a merchant webhook
 
 `POST /v1/admin/webhooks`
@@ -128,6 +133,7 @@ Content-Type: application/json
 ```
 
 The signature is HMAC-SHA256 over `timestamp + "." + rawBody`. Verify the timestamp and raw body before fulfilling an order.
+
 Example normalized event:
 
 ```json
@@ -153,7 +159,6 @@ Example normalized event:
 }
 ```
 
-
 ## Checkout expiry
 
 Checkout Sessions expire after 30 minutes by default. `expiresInSeconds` may be set from 60 to 86400 seconds. Expired sessions return status `expired` and hosted checkout returns HTTP 410. A provider webhook cannot create a new paid order from an expired session, while retries for an already-recorded provider order remain idempotent.
@@ -168,10 +173,9 @@ Inspect recent deliveries: `GET /v1/admin/webhook-deliveries?limit=100`.
 
 Replay one delivery: `POST /v1/admin/webhook-deliveries/{id}/redeliver`. Redelivery resets the existing delivery to `pending`; it does not create a duplicate commerce event.
 
-
 ## OpenAPI
 
-`GET /openapi.json` returns the embedded OpenAPI 3.1 contract for the public/admin v1 surface. See `API_VERSIONING.md` for compatibility rules.
+`GET /openapi.json` returns the embedded OpenAPI 3.1 contract for the public/admin v1 surface. See [`API_VERSIONING.md`](API_VERSIONING.md) for compatibility rules.
 
 ## Rate limiting
 
@@ -179,6 +183,39 @@ The single-node v0.1 server applies an in-process fixed-window limit by trusted 
 
 ## Provider readiness
 
-`GET /v1/admin/providers` is an admin-only, non-secret readiness endpoint. It reports whether Paddle, Dodo and ZPAY have the runtime configuration required to operate. Dodo additionally reports `mode: test|live`. Provider API keys and webhook secrets are never returned.
+`GET /v1/admin/providers` is an admin-only, non-secret readiness endpoint. It reports whether Paddle, Dodo and ZPAY have the runtime configuration required to operate. Provider API keys and webhook secrets are never returned.
 
-Use `scripts/provider_acceptance.py --provider dodo --dry-run` to validate service reachability, admin authentication and Dodo configuration without creating checkout objects. Once a Dodo test product exists, set `OIC_DODO_PRODUCT_ID` and run the harness without `--dry-run` to create a disposable OIC Product/Price/Checkout Session and obtain a real Dodo test checkout URL. The harness refuses `mode=live` unless `--allow-live` is explicitly passed.
+Use the unified acceptance harness for operational checks.
+
+All providers:
+
+```bash
+export OIC_ACCEPTANCE_ADMIN_TOKEN='...'
+python3 scripts/provider_acceptance.py \
+  --base-url https://commerce.example.com \
+  --provider all \
+  --dry-run
+```
+
+One provider:
+
+```bash
+python3 scripts/provider_acceptance.py \
+  --base-url https://commerce.example.com \
+  --provider dodo \
+  --dry-run
+```
+
+The accepted provider names are:
+
+```text
+paddle
+dodo
+zpay
+```
+
+For a configured provider, running the harness without `--dry-run` creates a disposable OpenIndieCommerce Product/Price/Checkout Session. Paddle/ZPAY return the OIC hosted browser checkout path; Dodo resolves through OIC to the provider checkout URL.
+
+For Paddle and Dodo, set the corresponding provider catalog ID (`OIC_PADDLE_PRICE_ID` or `OIC_DODO_PRODUCT_ID`) or pass `--provider-product-id`.
+
+The acceptance harness is a configuration/checkout test. It does not by itself prove production readiness. See [`PROVIDER_ONBOARDING.md`](PROVIDER_ONBOARDING.md) for the required sandbox/test, live transaction and payout/settlement gates.
