@@ -1,6 +1,14 @@
-# Minimal web-store integration
+# Independent web-store integration
 
-This Node 22 example has zero npm dependencies. The store backend creates Checkout Sessions and verifies OpenIndieCommerce merchant webhooks.
+This Node 22 example has zero npm dependencies and demonstrates the complete independent-site flow:
+
+1. your backend creates an OpenIndieCommerce Checkout Session;
+2. the browser is redirected to the hosted provider checkout;
+3. the success page does **not** trust the browser redirect as proof of payment;
+4. a signed `order.paid` merchant webhook creates the local entitlement;
+5. the customer receives access to a protected digital download;
+6. repeated webhook events are idempotent;
+7. `order.refunded` / `order.chargeback` remove the demo entitlement.
 
 Required environment:
 
@@ -11,11 +19,8 @@ export OIC_WEBHOOK_SECRET='whsec_...'
 node server.mjs
 ```
 
-Register the example receiver once:
+Register the receiver once with `POST /v1/admin/webhooks` and URL `https://your-store.example/webhooks/openindie`.
 
-```text
-POST /v1/admin/webhooks
-url = https://your-store.example/webhooks/openindie
-```
+For clarity this demo keeps entitlements in memory. A real site should persist `event.id`, `order.id`, its own user/customer ID and entitlement state in its database. Fulfillment must remain idempotent because webhook delivery is at-least-once.
 
-The browser talks only to the store backend. The backend creates the checkout session and redirects to the hosted checkout URL. This keeps trusted metadata and redirect URLs under server control.
+The merchant webhook verifier enforces a five-minute timestamp tolerance and constant-time HMAC comparison. Keep `OIC_WEBHOOK_SECRET` server-side; never expose it to browser JavaScript.
