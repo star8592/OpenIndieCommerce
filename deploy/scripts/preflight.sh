@@ -17,6 +17,12 @@ if [[ -n "${OIC_PADDLE_CLIENT_TOKEN:-}" || -n "${OIC_PADDLE_WEBHOOK_SECRET_FILE:
   [[ -n "${OIC_PADDLE_CLIENT_TOKEN:-}" ]] || { echo 'Paddle webhook configured but client token is missing' >&2; exit 1; }
   [[ -s "${OIC_PADDLE_WEBHOOK_SECRET_FILE:-/nonexistent}" ]] || { echo 'Paddle webhook secret file is missing' >&2; exit 1; }
 fi
+
+if [[ -n "${OIC_DODO_API_KEY_FILE:-}" || -n "${OIC_DODO_WEBHOOK_SECRET_FILE:-}" ]]; then
+  [[ -s "${OIC_DODO_API_KEY_FILE:-/nonexistent}" ]] || { echo 'Dodo API key file is missing' >&2; exit 1; }
+  [[ -s "${OIC_DODO_WEBHOOK_SECRET_FILE:-/nonexistent}" ]] || { echo 'Dodo webhook secret file is missing' >&2; exit 1; }
+  [[ "${OIC_DODO_ENV:-test}" == "test" || "${OIC_DODO_ENV:-test}" == "live" ]] || { echo 'OIC_DODO_ENV must be test or live' >&2; exit 1; }
+fi
 if [[ -n "${OIC_ZPAY_PID:-}" || -n "${OIC_ZPAY_KEY_FILE:-}" ]]; then
   [[ -n "${OIC_ZPAY_PID:-}" ]] || { echo 'ZPAY key configured but pid is missing' >&2; exit 1; }
   [[ -s "${OIC_ZPAY_KEY_FILE:-/nonexistent}" ]] || { echo 'ZPAY key file is missing' >&2; exit 1; }

@@ -11,7 +11,7 @@ website creates Checkout Session
         ↓
 customer opens /checkout/{sessionId}
         ↓
-Paddle / ZPAY completes payment
+Paddle / Dodo / ZPAY completes payment
         ↓
 OpenIndieCommerce verifies provider webhook
         ↓
@@ -70,6 +70,21 @@ ZPAY example:
   "unitAmount": 9900
 }
 ```
+
+Dodo example:
+
+```json
+{
+  "productId": "prod_...",
+  "provider": "dodo",
+  "currency": "USD",
+  "unitAmount": 1900,
+  "providerPriceId": "pdt_..."
+}
+```
+
+For Dodo, `providerPriceId` is the Dodo product ID. OpenIndieCommerce creates a Dodo Checkout Session server-side and writes the canonical OIC checkout-session ID into Dodo metadata. Payment is fulfilled only from a verified `payment.succeeded` webhook. Full `refund.succeeded` maps to `order.refunded`; partial refunds do not revoke the whole entitlement. `dispute.lost` maps to `order.chargeback`.
+
 ## Create a checkout session
 
 `POST /v1/checkout/sessions`

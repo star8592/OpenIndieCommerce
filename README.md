@@ -20,8 +20,8 @@ Your website / desktop app / SaaS
               |
       +-------+-------+
       |               |
-   Paddle           ZPAY
-  overseas      mainland China
+   Paddle / Dodo       ZPAY
+      overseas      mainland China
 ```
 
 OpenIndieCommerce is non-custodial. It does not hold customer funds or card data.
@@ -32,6 +32,7 @@ Implemented and tested:
 - Product and Price records
 - Checkout Sessions
 - hosted Paddle checkout
+- hosted Dodo Payments Checkout Sessions (test/live environments)
 - hosted ZPAY Alipay / WeChat checkout
 - provider webhook signature verification
 - canonical `order.paid`, `order.refunded`, `order.chargeback`

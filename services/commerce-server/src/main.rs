@@ -20,6 +20,7 @@ use openindiecommerce_server::{
         CheckoutSession, CommerceStore, DEFAULT_CHECKOUT_TTL_SECONDS, MerchantWebhookEndpoint,
         Price, Product, WebhookDeliveryStatus,
     },
+    dodo::{self, DodoCheckoutRequest, DodoEvent},
     paddle::{self, PaddleEvent},
     zpay,
 };
@@ -35,6 +36,11 @@ struct AppState {
     paddle_webhook_secret: Option<Arc<String>>,
     paddle_client_token: Option<Arc<String>>,
     paddle_signature_tolerance_seconds: u64,
+    dodo_api_key: Option<Arc<String>>,
+    dodo_webhook_secret: Option<Arc<String>>,
+    dodo_base_url: Arc<String>,
+    dodo_signature_tolerance_seconds: u64,
+    dodo_http_client: reqwest::Client,
     zpay_pid: Option<Arc<String>>,
     zpay_key: Option<Arc<String>>,
     zpay_submit_url: Arc<String>,
@@ -784,6 +790,41 @@ async fn hosted_checkout(
                 &price,
             )))
         }
+        "dodo" => {
+            let api_key = state.dodo_api_key.as_deref().ok_or_else(|| {
+                api_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Dodo API key is not configured",
+                )
+            })?;
+            let product_id = price.provider_price_id.as_deref().ok_or_else(|| {
+                api_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Dodo product ID is not configured",
+                )
+            })?;
+            let checkout = dodo::create_checkout(
+                &state.dodo_http_client,
+                DodoCheckoutRequest {
+                    base_url: &state.dodo_base_url,
+                    api_key,
+                    product_id,
+                    email: &session.email,
+                    oic_session_id: &session.id,
+                    return_url: session.success_url.as_deref(),
+                    cancel_url: session.cancel_url.as_deref(),
+                },
+            )
+            .await
+            .map_err(|e| api_error(StatusCode::BAD_GATEWAY, e))?;
+            let url_json = serde_json::to_string(&checkout.checkout_url)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+            Ok(Html(format!(
+                r#"<!doctype html><meta charset="utf-8"><title>Redirecting…</title><p>Redirecting to secure checkout…</p><p><a href="{}">Continue</a></p><script>location.replace({});</script>"#,
+                html_escape(&checkout.checkout_url),
+                url_json
+            )))
+        }
         "zpay" => {
             let pid = state.zpay_pid.as_deref().ok_or_else(|| {
                 api_error(
@@ -959,6 +1000,82 @@ async fn paddle_webhook(
     }))
 }
 
+async fn dodo_webhook(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> ApiResult<PaddleWebhookResponse> {
+    let secret = state.dodo_webhook_secret.as_deref().ok_or_else(|| {
+        api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Dodo webhook is not configured",
+        )
+    })?;
+    let webhook_id = headers
+        .get("webhook-id")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "missing webhook-id"))?;
+    let timestamp = headers
+        .get("webhook-timestamp")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "missing webhook-timestamp"))?;
+    let signature = headers
+        .get("webhook-signature")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "missing webhook-signature"))?;
+    dodo::verify_signature(
+        secret,
+        webhook_id,
+        timestamp,
+        signature,
+        &body,
+        dodo::unix_now(),
+        state.dodo_signature_tolerance_seconds,
+    )
+    .map_err(|e| api_error(StatusCode::UNAUTHORIZED, e))?;
+    let event: DodoEvent = serde_json::from_slice(&body)
+        .map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("invalid Dodo event: {e}")))?;
+    let Some(outcome) = dodo::process_commerce_event(&state.commerce, &event)
+        .map_err(|e| api_error(StatusCode::UNPROCESSABLE_ENTITY, e))?
+    else {
+        return Ok(Json(PaddleWebhookResponse {
+            ok: true,
+            action: "ignored",
+            transaction_id: None,
+        }));
+    };
+    tracing::info!(%webhook_id,order_id=%outcome.order.id,inserted=outcome.inserted,"processed canonical Dodo commerce event");
+    let action = match outcome.event.event_type.as_str() {
+        "order.paid" => {
+            if outcome.inserted {
+                "paid_recorded"
+            } else {
+                "paid_already_recorded"
+            }
+        }
+        "order.refunded" => {
+            if outcome.inserted {
+                "refund_recorded"
+            } else {
+                "refund_already_recorded"
+            }
+        }
+        "order.chargeback" => {
+            if outcome.inserted {
+                "chargeback_recorded"
+            } else {
+                "chargeback_already_recorded"
+            }
+        }
+        _ => "commerce_event_recorded",
+    };
+    Ok(Json(PaddleWebhookResponse {
+        ok: true,
+        action,
+        transaction_id: Some(outcome.order.provider_order_id),
+    }))
+}
+
 async fn activate(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1019,6 +1136,22 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(paddle::DEFAULT_SIGNATURE_TOLERANCE_SECONDS);
+    let dodo_api_key = optional_secret_value("OIC_DODO_API_KEY")?.map(Arc::new);
+    let dodo_webhook_secret = optional_secret_value("OIC_DODO_WEBHOOK_SECRET")?.map(Arc::new);
+    let dodo_base_url = Arc::new(env::var("OIC_DODO_BASE_URL").unwrap_or_else(|_| {
+        match env::var("OIC_DODO_ENV").as_deref() {
+            Ok("live") => dodo::LIVE_BASE_URL.to_string(),
+            _ => dodo::TEST_BASE_URL.to_string(),
+        }
+    }));
+    let dodo_signature_tolerance_seconds = env::var("OIC_DODO_WEBHOOK_TOLERANCE_SECONDS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(dodo::DEFAULT_SIGNATURE_TOLERANCE_SECONDS);
+    let dodo_http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .user_agent("OpenIndieCommerce/0.1")
+        .build()?;
     let zpay_pid = env::var("OIC_ZPAY_PID")
         .ok()
         .filter(|v| !v.trim().is_empty())
@@ -1039,6 +1172,11 @@ async fn main() -> anyhow::Result<()> {
         paddle_webhook_secret,
         paddle_client_token,
         paddle_signature_tolerance_seconds,
+        dodo_api_key,
+        dodo_webhook_secret,
+        dodo_base_url,
+        dodo_signature_tolerance_seconds,
+        dodo_http_client,
         zpay_pid,
         zpay_key,
         zpay_submit_url,
@@ -1073,6 +1211,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/licenses/claim", post(claim_license))
         .route("/v1/licenses/activate", post(activate))
         .route("/v1/webhooks/paddle", post(paddle_webhook))
+        .route("/v1/webhooks/dodo", post(dodo_webhook))
         .route("/v1/webhooks/zpay", get(zpay_webhook))
         .route("/v1/licenses/validate", post(validate))
         .route("/v1/licenses/deactivate", post(deactivate))

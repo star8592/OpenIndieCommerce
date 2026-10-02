@@ -6,6 +6,7 @@
 - [x] canonical Order model
 - [x] canonical `order.paid`, `order.refunded`, `order.chargeback`
 - [x] Paddle hosted-checkout + signed webhook adapter
+- [x] Dodo Payments Checkout Sessions + Standard Webhooks adapter
 - [x] ZPAY Alipay / WeChat hosted-checkout + signed callback adapter
 - [x] reliable outbound merchant webhook outbox
 - [x] optional entitlement/license module
@@ -25,7 +26,7 @@
 - [x] API versioning policy and OpenAPI specification
 
 ## Later
-- Dodo Payments and Creem adapters
+- Creem adapter
 - subscriptions and recurring entitlements
 - coupons / promotion codes
 - optional Stripe/PayPal direct PSP adapters
