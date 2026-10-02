@@ -35,6 +35,19 @@ class ProviderAcceptanceTests(unittest.TestCase):
         self.assertEqual(report["status"], "PARTIAL")
         self.assertFalse(report["providers"][2]["configured"])
 
+    def test_known_test_modes_do_not_require_live_opt_in(self):
+        self.assertFalse(m.requires_live_opt_in("dodo", "test"))
+        self.assertFalse(m.requires_live_opt_in("paddle", "sandbox"))
+        self.assertFalse(m.requires_live_opt_in("paddle", "test"))
+
+    def test_live_direct_and_unknown_modes_require_opt_in(self):
+        self.assertTrue(m.requires_live_opt_in("dodo", "live"))
+        self.assertTrue(m.requires_live_opt_in("paddle", "live"))
+        self.assertTrue(m.requires_live_opt_in("paddle", None))
+        self.assertTrue(m.requires_live_opt_in("zpay", None))
+        self.assertTrue(m.requires_live_opt_in("zpay", "direct"))
+        self.assertTrue(m.requires_live_opt_in("future-provider", "test"))
+
     def test_extracts_and_unescapes_dodo_checkout_url(self):
         page = '<a href="https://test.dodopayments.com/a?x=1&amp;y=2">Continue</a>'
         self.assertEqual(

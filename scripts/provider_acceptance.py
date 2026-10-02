@@ -4,6 +4,11 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 PROVIDERS = ("paddle", "dodo", "zpay")
+KNOWN_TEST_MODES = {
+    "dodo": {"test"},
+    "paddle": {"sandbox", "test"},
+    "zpay": set(),
+}
 
 
 class AcceptanceError(RuntimeError):
@@ -65,6 +70,11 @@ def readiness_report(status, providers):
     else:
         overall = "BLOCKED"
     return {"status": overall, "providers": rows}
+
+
+def requires_live_opt_in(provider, mode):
+    """Fail closed unless the server explicitly reports a known non-money test mode."""
+    return mode not in KNOWN_TEST_MODES.get(provider, set())
 
 
 def dodo_checkout_url(page):
@@ -158,7 +168,11 @@ def main():
         default=100,
         help="minor units, default 100 = USD 1.00 / CNY 1.00",
     )
-    parser.add_argument("--allow-live", action="store_true")
+    parser.add_argument(
+        "--allow-live",
+        action="store_true",
+        help="explicitly allow checkout creation when provider mode is live, direct, or unknown",
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -209,15 +223,17 @@ def main():
                     "status": "PROVIDER_CONFIG_READY",
                     "provider": args.provider,
                     "mode": mode,
+                    "liveOptInRequired": requires_live_opt_in(args.provider, mode),
                 },
                 indent=2,
             )
         )
         return 0
 
-    if args.provider == "dodo" and mode == "live" and not args.allow_live:
+    if requires_live_opt_in(args.provider, mode) and not args.allow_live:
+        shown_mode = mode if mode is not None else "unknown"
         raise AcceptanceError(
-            "refusing live Dodo acceptance run without --allow-live"
+            f"refusing {args.provider} checkout in mode={shown_mode} without --allow-live"
         )
 
     provider_product_id = args.provider_product_id or default_provider_product_id(
